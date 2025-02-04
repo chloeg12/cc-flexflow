@@ -579,7 +579,13 @@ class LLM:
                     raise ValueError(
                         f"max_length ({req.max_length}) exceeds the maximum sequence length ({self.max_seq_length})"
                     )
-        return self.model.ffmodel.generate(requests)
+        print("---start in serve----")
+        results = self.model.ffmodel.generate(requests)
+        print("i have results")
+        for result in results:
+            print("------Finetuning losses:", result.finetuning_losses)
+        # return self.model.ffmodel.generate(requests)
+        return results
 
     def __chat2prompt(self, messages: List[dict]) -> str:
         """Convert a list of messages to a single prompt string
@@ -610,11 +616,12 @@ class LLM:
         )
 
     def __output2chat_response(
-        self, requests: List[Request], outputs: List[GenerationResult]
+        self, requests: List[Request], outputs: List[GenerationResult], add: int = 0
     ) -> List[GenerationResult]:
         assert len(requests) == len(outputs)
         for i in range(len(outputs)):
-            outputs[i].output_text = outputs[i].output_text[len(requests[i].prompt) :]
+            # outputs[i].output_text = outputs[i].output_text[len(requests[i].prompt) :]
+            outputs[i].output_text = outputs[i].output_text[len(requests[i].prompt) + add:]
         return outputs
 
     def generate(
@@ -645,7 +652,9 @@ class LLM:
             )
             return self._generate([request])
         elif type(requests_or_prompts) == Request:
-            return self._generate([requests_or_prompts])
+            outputs = self._generate([requests_or_prompts])
+            return self.__output2chat_response([requests_or_prompts], outputs, add=16)
+            # return self._generate([requests_or_prompts])
         elif type(requests_or_prompts) == list:
             if len(requests_or_prompts) == 0:
                 return []
