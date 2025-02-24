@@ -7,12 +7,13 @@
 3. In one terminal, launch the LLM engine with the commands below, and wait until the model's weights loading completes
 ```
 cd FlexFlow/inference/python/streamlit
-python fastapi_incr.py
+export PORT_NUMBER=8080
+uvicorn fastapi_incr:app --reload --port $PORT_NUMBER
 ```
 4. In another terminal, launch the streamlit app:
 ```
 cd FlexFlow/inference/python/streamlit
-streamlit run app.py 
+streamlit run app.py --server.port 8501 --server.address 0.0.0.0
 ```
 5. Open the URL printed to the terminal, e.g. `http://localhost:8501` and interact with the app via browser
 

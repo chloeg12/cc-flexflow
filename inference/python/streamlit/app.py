@@ -8,8 +8,8 @@ from huggingface_hub import model_info
 st.set_page_config(page_title="🚀💻 FlexLLM Server", layout="wide")
 
 # FastAPI server URL
-FASTAPI_URL = "http://localhost:8080/chat/completions"  # Adjust the port if necessary
-FINETUNE_URL = "http://localhost:8080/finetuning"
+CHAT_URL = "http://localhost:8080/chat/completions/"  # Adjust the port if necessary
+FINETUNE_URL = "http://localhost:8080/finetuning/"
 REGISTER_ADAPTER_URL = "http://localhost:8080/register_adapter/"
 
 # Initialize session state variables
@@ -39,10 +39,8 @@ def generate_llama3_response(prompt_input):
     system_prompt="You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Please ensure that your responses are positive in nature."
     
     # Send request to FastAPI server
-    # response = requests.post(FASTAPI_URL, json={"max_new_tokens": 1024, "messages": [{"role": "system", "content": system_prompt}] + st.session_state.messages + [{"role": "user", "content": prompt_input}]})
-
     response = requests.post(
-        FASTAPI_URL,
+        CHAT_URL,
         json={
             "max_new_tokens": max_length,
             "temperature": temperature,
@@ -53,10 +51,12 @@ def generate_llama3_response(prompt_input):
         }
     )
 
+    result = response.json()
     if response.status_code == 200:
-        return response.json()["response"]
+        if result["status"] == "success":
+            return result["response"]
     else:
-        return f"Error: {response.status_code} - {response.text}"
+        return f"{result['detail']}"
 
 # Sidebar
 with st.sidebar:
@@ -85,8 +85,8 @@ with st.sidebar:
                 with st.spinner("Registering LoRA adapter..."):
                     response = requests.post(REGISTER_ADAPTER_URL, params={"peft_model_name": peft_model_name})
 
+                result = response.json()
                 if response.status_code == 200:
-                    result = response.json()
                     if result["status"] == "success":
                         st.session_state.adapter = peft_model_name
                         st.session_state.peft_model_id = result["peft_model_id"]
@@ -94,7 +94,7 @@ with st.sidebar:
                     else:
                         st.error(f"Failed to register adapter: {result['detail']}")
                 else:
-                    st.error(f"Error: {response.status_code} - {response.text}")
+                    st.error(f"Failed to register adapter: {result['detail']}")
             else:
                 st.warning("Please enter a PEFT model ID.")
                 
@@ -129,7 +129,10 @@ with st.sidebar:
                 st.session_state.hf_token = hf_token
         
         # PEFT model name
-        peft_model_name = st.text_input("Enter the PEFT model name:", help="The name of the PEFT model should start with the username associated with the provided HF token, followed by '/'ß. E.g. 'username/peft-base-uncased'")
+        peft_model_name = st.text_input(
+            "Enter the PEFT model name:", 
+            help="The name of the PEFT model should start with the username associated with the provided HF token, followed by '/'ß. E.g. 'username/peft-base-uncased'"
+        )
         
         # Dataset selection
         dataset_option = st.radio("Choose dataset source:", ["Upload JSON", "Hugging Face Dataset"])
@@ -140,7 +143,14 @@ with st.sidebar:
                 dataset = json.load(uploaded_file)
                 st.success("Dataset uploaded successfully!")
         else:
-            dataset_name = st.text_input("Enter Hugging Face dataset name:")
+            dataset_name = st.text_input(
+                "Enter Hugging Face dataset name:",
+                help="The dataset name should follow the format 'username/dataset-name'"
+            )
+            file_name = st.text_input(
+                "Enter the specific file name:",
+                help="The file name should include the exact JSON file to be used. E.g., xx.json"
+            )
         
         # Finetuning parameters
         st.subheader("Finetuning parameters")
@@ -160,8 +170,8 @@ with st.sidebar:
                 st.error("Please enter your Hugging Face token.")
             elif dataset_option == "Upload JSON" and uploaded_file is None:
                 st.error("Please upload a JSON dataset.")
-            elif dataset_option == "Hugging Face Dataset" and not dataset_name:
-                st.error("Please enter a Hugging Face dataset name.")
+            elif dataset_option == "Hugging Face Dataset" and (not dataset_name or not file_name):
+                st.error("Please enter a Hugging Face dataset name and file name.")
             else:
                 # Prepare the request data
                 request_data = {
@@ -183,18 +193,20 @@ with st.sidebar:
                     request_data["dataset"] = dataset
                 else:
                     request_data["dataset_name"] = dataset_name
+                    request_data["file_name"] = file_name
                 
                 print("---Front: here is request data----")
                 print(request_data)
                 # Send finetuning request to FastAPI server
                 with st.spinner("Finetuning in progress..."):
                     response = requests.post(FINETUNE_URL, json=request_data)
-                
+
+                result = response.json()
                 if response.status_code == 200:
                     st.success("Finetuning completed successfully!")
                 else:
-                    error_msg = response.json().get("message", "Unknown error occurred.")
-                    st.error(f"Finetuning failed. Error: {error_msg}")
+                    error_msg = result.get("detail", "Unknown error occurred.")
+                    st.error(f"Finetuning failed. {error_msg}")
 
 if page == "Chat":
     # Display or clear chat messages

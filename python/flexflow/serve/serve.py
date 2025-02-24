@@ -381,36 +381,53 @@ class LLM:
             dst_path = os.path.join(peft_config_dir, "config.json")
             os.makedirs(peft_config_dir, exist_ok=True)
             print(f"Saving {hf_peft_model_id} configs to file {dst_path}...")
-            config_path = snapshot_download(
-                repo_id=hf_peft_model_id, allow_patterns="adapter_config.json"
-            )
-            src_path = os.path.join(config_path, "adapter_config.json")
-            if os.path.exists(src_path):
-                shutil.copy(src_path, dst_path)
 
-            # Save peft weights to file
-            adapter_path = snapshot_download(
-                repo_id=hf_peft_model_id, allow_patterns="adapter_model.safetensors"
-            )
-            weights_path = self.__get_resource_path(
-                hf_peft_model_id.lower(), CachedResourceType.WEIGHTS
-            )
-            with safe_open(adapter_path, framework="pt", device="cpu") as f:
-                for tensor_name in f.keys():
-                    tensor = f.get_tensor(tensor_name)
-                    if self.data_type == DataType.DT_HALF:
-                        tensor = tensor.half()
-                    else:
-                        tensor = tensor.float()
-                    tensor_name = tensor_name.replace(
-                        "base_model.model.model.", ""
-                    ).replace(".default", "")
-                    print(tensor_name)
+            try:
+                config_path = snapshot_download(
+                    repo_id=hf_peft_model_id, allow_patterns="adapter_config.json"
+                )
+                src_path = os.path.join(config_path, "adapter_config.json")
+                if os.path.exists(src_path):
+                    shutil.copy(src_path, dst_path)
 
-                    tensor_name = self.model_class.convert_hf_weight_name(tensor_name)
-                    tensor.detach().cpu().numpy().tofile(
-                        f"{weights_path}/{tensor_name}"
-                    )
+                # Save peft weights to file
+                adapter_path = snapshot_download(
+                    repo_id=hf_peft_model_id, allow_patterns="adapter_model.safetensors"
+                )
+                weights_path = self.__get_resource_path(
+                    hf_peft_model_id.lower(), CachedResourceType.WEIGHTS
+                )
+                adapter_path = os.path.join(adapter_path, "adapter_model.safetensors")
+                with safe_open(adapter_path, framework="pt", device="cpu") as f:
+                    for tensor_name in f.keys():
+                        tensor = f.get_tensor(tensor_name)
+                        if self.data_type == DataType.DT_HALF:
+                            tensor = tensor.half()
+                        else:
+                            tensor = tensor.float()
+                        tensor_name = tensor_name.replace(
+                            "base_model.model.model.", ""
+                        ).replace(".default", "")
+                        print(tensor_name)
+
+                        tensor_name = self.model_class.convert_hf_weight_name(tensor_name)
+                        tensor.detach().cpu().numpy().tofile(
+                            f"{weights_path}/{tensor_name}"
+                        )
+            except Exception as e:
+                # Remove corrupted dirs and files
+                if os.path.exists(peft_config_dir):
+                    shutil.rmtree(peft_config_dir)
+                weights_parent_path = os.path.join(
+                    os.path.expanduser(self.cache_path),
+                    "weights",
+                    hf_peft_model_id.lower()
+                )
+                if os.path.exists(weights_parent_path):
+                    shutil.rmtree(weights_parent_path)
+                self.refresh_cache = True
+                # Re-raise the original exception for backend to catch
+                raise
 
         need_refresh = self.__need_cache_refresh(
             hf_peft_model_id, CachedResourceType.WEIGHTS
@@ -579,13 +596,7 @@ class LLM:
                     raise ValueError(
                         f"max_length ({req.max_length}) exceeds the maximum sequence length ({self.max_seq_length})"
                     )
-        print("---start in serve----")
-        results = self.model.ffmodel.generate(requests)
-        print("i have results")
-        for result in results:
-            print("------Finetuning losses:", result.finetuning_losses)
-        # return self.model.ffmodel.generate(requests)
-        return results
+        return self.model.ffmodel.generate(requests)
 
     def __chat2prompt(self, messages: List[dict]) -> str:
         """Convert a list of messages to a single prompt string
@@ -616,12 +627,11 @@ class LLM:
         )
 
     def __output2chat_response(
-        self, requests: List[Request], outputs: List[GenerationResult], add: int = 0
+        self, requests: List[Request], outputs: List[GenerationResult], padding: int = 0
     ) -> List[GenerationResult]:
-        assert len(requests) == len(outputs)
+         
         for i in range(len(outputs)):
-            # outputs[i].output_text = outputs[i].output_text[len(requests[i].prompt) :]
-            outputs[i].output_text = outputs[i].output_text[len(requests[i].prompt) + add:]
+            outputs[i].output_text = outputs[i].output_text[len(requests[i].prompt) + padding:]
         return outputs
 
     def generate(
@@ -653,8 +663,10 @@ class LLM:
             return self._generate([request])
         elif type(requests_or_prompts) == Request:
             outputs = self._generate([requests_or_prompts])
-            return self.__output2chat_response([requests_or_prompts], outputs, add=16)
-            # return self._generate([requests_or_prompts])
+            if requests_or_prompts.req_type == RequestType.REQ_INFERENCE:
+                return self.__output2chat_response([requests_or_prompts], outputs, padding=16)
+            else:
+                return outputs
         elif type(requests_or_prompts) == list:
             if len(requests_or_prompts) == 0:
                 return []
